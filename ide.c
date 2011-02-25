@@ -18,44 +18,44 @@
 #define IDE_CMD_READ  0x20
 #define IDE_CMD_WRITE 0x30
 
-// ide_queue points to the buf now being read/written to the disk.
-// ide_queue->qnext points to the next buf to be processed.
-// You must hold ide_lock while manipulating queue.
+// idequeue points to the buf now being read/written to the disk.
+// idequeue->qnext points to the next buf to be processed.
+// You must hold idelock while manipulating queue.
 
-static struct spinlock ide_lock;
-static struct buf *ide_queue;
+static struct spinlock idelock;
+static struct buf *idequeue;
 
-static int disk_1_present;
-static void ide_start_request();
+static int havedisk1;
+static void idestart(struct buf*);
 
 // Wait for IDE disk to become ready.
 static int
-ide_wait_ready(int check_error)
+idewait(int checkerr)
 {
   int r;
 
-  while(((r = inb(0x1f7)) & IDE_BSY) || !(r & IDE_DRDY))
+  while(((r = inb(0x1f7)) & (IDE_BSY|IDE_DRDY)) != IDE_DRDY) 
     ;
-  if(check_error && (r & (IDE_DF|IDE_ERR)) != 0)
+  if(checkerr && (r & (IDE_DF|IDE_ERR)) != 0)
     return -1;
   return 0;
 }
 
 void
-ide_init(void)
+ideinit(void)
 {
   int i;
 
-  initlock(&ide_lock, "ide");
-  pic_enable(IRQ_IDE);
-  ioapic_enable(IRQ_IDE, ncpu - 1);
-  ide_wait_ready(0);
+  initlock(&idelock, "ide");
+  picenable(IRQ_IDE);
+  ioapicenable(IRQ_IDE, ncpu - 1);
+  idewait(0);
   
   // Check if disk 1 is present
   outb(0x1f6, 0xe0 | (1<<4));
   for(i=0; i<1000; i++){
     if(inb(0x1f7) != 0){
-      disk_1_present = 1;
+      havedisk1 = 1;
       break;
     }
   }
@@ -64,14 +64,14 @@ ide_init(void)
   outb(0x1f6, 0xe0 | (0<<4));
 }
 
-// Start the request for b.  Caller must hold ide_lock.
+// Start the request for b.  Caller must hold idelock.
 static void
-ide_start_request(struct buf *b)
+idestart(struct buf *b)
 {
   if(b == 0)
-    panic("ide_start_request");
+    panic("idestart");
 
-  ide_wait_ready(0);
+  idewait(0);
   outb(0x3f6, 0);  // generate interrupt
   outb(0x1f2, 1);  // number of sectors
   outb(0x1f3, b->sector & 0xff);
@@ -88,18 +88,21 @@ ide_start_request(struct buf *b)
 
 // Interrupt handler.
 void
-ide_intr(void)
+ideintr(void)
 {
   struct buf *b;
 
-  acquire(&ide_lock);
-  if((b = ide_queue) == 0){
-    release(&ide_lock);
+  // Take first buffer off queue.
+  acquire(&idelock);
+  if((b = idequeue) == 0){
+    release(&idelock);
+    cprintf("Spurious IDE interrupt.\n");
     return;
   }
+  idequeue = b->qnext;
 
   // Read data if needed.
-  if(!(b->flags & B_DIRTY) && ide_wait_ready(1) >= 0)
+  if(!(b->flags & B_DIRTY) && idewait(1) >= 0)
     insl(0x1f0, b->data, 512/4);
   
   // Wake process waiting for this buf.
@@ -108,43 +111,43 @@ ide_intr(void)
   wakeup(b);
   
   // Start disk on next buf in queue.
-  if((ide_queue = b->qnext) != 0)
-    ide_start_request(ide_queue);
+  if(idequeue != 0)
+    idestart(idequeue);
 
-  release(&ide_lock);
+  release(&idelock);
 }
 
 // Sync buf with disk. 
 // If B_DIRTY is set, write buf to disk, clear B_DIRTY, set B_VALID.
 // Else if B_VALID is not set, read buf from disk, set B_VALID.
 void
-ide_rw(struct buf *b)
+iderw(struct buf *b)
 {
   struct buf **pp;
 
   if(!(b->flags & B_BUSY))
-    panic("ide_rw: buf not busy");
+    panic("iderw: buf not busy");
   if((b->flags & (B_VALID|B_DIRTY)) == B_VALID)
-    panic("ide_rw: nothing to do");
-  if(b->dev != 0 && !disk_1_present)
-    panic("ide disk 1 not present");
+    panic("iderw: nothing to do");
+  if(b->dev != 0 && !havedisk1)
+    panic("idrw: ide disk 1 not present");
 
-  acquire(&ide_lock);
+  acquire(&idelock);
 
-  // Append b to ide_queue.
+  // Append b to idequeue.
   b->qnext = 0;
-  for(pp=&ide_queue; *pp; pp=&(*pp)->qnext)
+  for(pp=&idequeue; *pp; pp=&(*pp)->qnext)
     ;
   *pp = b;
   
   // Start disk if necessary.
-  if(ide_queue == b)
-    ide_start_request(b);
+  if(idequeue == b)
+    idestart(b);
   
   // Wait for request to finish.
-  // Assuming will not sleep too long: ignore cp->killed.
+  // Assuming will not sleep too long: ignore proc->killed.
   while((b->flags & (B_VALID|B_DIRTY)) != B_VALID)
-    sleep(b, &ide_lock);
+    sleep(b, &idelock);
 
-  release(&ide_lock);
+  release(&idelock);
 }

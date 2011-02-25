@@ -6,6 +6,7 @@
 #include <assert.h>
 #include "types.h"
 #include "fs.h"
+#include "stat.h"
 
 int nblocks = 995;
 int ninodes = 200;
@@ -92,7 +93,7 @@ main(int argc, char *argv[])
   wsect(1, &sb);
 
   rootino = ialloc(T_DIR);
-  assert(rootino == 1);
+  assert(rootino == ROOTINO);
 
   bzero(&de, sizeof(de));
   de.inum = xshort(rootino);
@@ -258,17 +259,17 @@ iappend(uint inum, void *xp, int n)
       }
       x = xint(din.addrs[fbn]);
     } else {
-      if(xint(din.addrs[INDIRECT]) == 0) {
+      if(xint(din.addrs[NDIRECT]) == 0) {
         // printf("allocate indirect block\n");
-        din.addrs[INDIRECT] = xint(freeblock++);
+        din.addrs[NDIRECT] = xint(freeblock++);
         usedblocks++;
       }
       // printf("read indirect block\n");
-      rsect(xint(din.addrs[INDIRECT]), (char*) indirect);
+      rsect(xint(din.addrs[NDIRECT]), (char*) indirect);
       if(indirect[fbn - NDIRECT] == 0) {
         indirect[fbn - NDIRECT] = xint(freeblock++);
         usedblocks++;
-        wsect(xint(din.addrs[INDIRECT]), (char*) indirect);
+        wsect(xint(din.addrs[NDIRECT]), (char*) indirect);
       }
       x = xint(indirect[fbn-NDIRECT]);
     }

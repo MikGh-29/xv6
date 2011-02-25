@@ -12,10 +12,10 @@ inb(ushort port)
 static inline void
 insl(int port, void *addr, int cnt)
 {
-  asm volatile("cld\n\trepne\n\tinsl"     :
-                   "=D" (addr), "=c" (cnt)    :
-                   "d" (port), "0" (addr), "1" (cnt)  :
-                   "memory", "cc");
+  asm volatile("cld; rep insl" :
+               "=D" (addr), "=c" (cnt) :
+               "d" (port), "0" (addr), "1" (cnt) :
+               "memory", "cc");
 }
 
 static inline void
@@ -33,19 +33,19 @@ outw(ushort port, ushort data)
 static inline void
 outsl(int port, const void *addr, int cnt)
 {
-  asm volatile("cld\n\trepne\n\toutsl"    :
-                   "=S" (addr), "=c" (cnt)    :
-                   "d" (port), "0" (addr), "1" (cnt)  :
-                   "cc");
+  asm volatile("cld; rep outsl" :
+               "=S" (addr), "=c" (cnt) :
+               "d" (port), "0" (addr), "1" (cnt) :
+               "cc");
 }
 
-static inline uint
-read_ebp(void)
+static inline void
+stosb(void *addr, int data, int cnt)
 {
-  uint ebp;
-  
-  asm volatile("movl %%ebp, %0" : "=a" (ebp));
-  return ebp;
+  asm volatile("cld; rep stosb" :
+               "=D" (addr), "=c" (cnt) :
+               "0" (addr), "1" (cnt), "a" (data) :
+               "memory", "cc");
 }
 
 struct segdesc;
@@ -83,17 +83,11 @@ ltr(ushort sel)
 }
 
 static inline uint
-read_eflags(void)
+readeflags(void)
 {
   uint eflags;
   asm volatile("pushfl; popl %0" : "=r" (eflags));
   return eflags;
-}
-
-static inline void
-write_eflags(uint eflags)
-{
-  asm volatile("pushl %0; popfl" : : "r" (eflags));
 }
 
 static inline uint
@@ -107,6 +101,12 @@ xchg(volatile uint *addr, uint newval)
                "1" (newval) :
                "cc");
   return result;
+}
+
+static inline void
+loadgs(ushort v)
+{
+  asm volatile("movw %0, %%gs" : : "r" (v));
 }
 
 static inline void
@@ -135,21 +135,25 @@ struct trapframe {
   uint eax;
 
   // rest of trap frame
-  ushort es;
+  ushort gs;
   ushort padding1;
-  ushort ds;
+  ushort fs;
   ushort padding2;
+  ushort es;
+  ushort padding3;
+  ushort ds;
+  ushort padding4;
   uint trapno;
 
   // below here defined by x86 hardware
   uint err;
   uint eip;
   ushort cs;
-  ushort padding3;
+  ushort padding5;
   uint eflags;
 
   // below here only when crossing rings, such as from user to kernel
   uint esp;
   ushort ss;
-  ushort padding4;
+  ushort padding6;
 };

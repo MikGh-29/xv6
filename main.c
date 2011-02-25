@@ -12,27 +12,25 @@ static void mpmain(void) __attribute__((noreturn));
 int
 main(void)
 {
-  extern char edata[], end[];
+  mpinit(); // collect info about this machine
+  lapicinit(mpbcpu());
+  ksegment();
+  picinit();       // interrupt controller
+  ioapicinit();    // another interrupt controller
+  consoleinit();   // I/O devices & their interrupts
+  uartinit();      // serial port
+cprintf("cpus %p cpu %p\n", cpus, cpu);
+  cprintf("\ncpu%d: starting xv6\n\n", cpu->id);
 
-  // clear BSS
-  memset(edata, 0, end - edata);
-
-  mp_init(); // collect info about this machine
-  lapic_init(mp_bcpu());
-  cprintf("\ncpu%d: starting xv6\n\n", cpu());
-
-  pinit();         // process table
-  binit();         // buffer cache
-  pic_init();      // interrupt controller
-  ioapic_init();   // another interrupt controller
   kinit();         // physical memory allocator
+  pinit();         // process table
   tvinit();        // trap vectors
+  binit();         // buffer cache
   fileinit();      // file table
   iinit();         // inode cache
-  console_init();  // I/O devices & their interrupts
-  ide_init();      // disk
+  ideinit();       // disk
   if(!ismp)
-    timer_init();  // uniprocessor timer
+    timerinit();   // uniprocessor timer
   userinit();      // first user process
   bootothers();    // start other processors
 
@@ -45,14 +43,14 @@ main(void)
 static void
 mpmain(void)
 {
-  cprintf("cpu%d: mpmain\n", cpu());
+  if(cpunum() != mpbcpu())
+    lapicinit(cpunum());
+  ksegment();
+  cprintf("cpu%d: mpmain\n", cpu->id);
   idtinit();
-  if(cpu() != mp_bcpu())
-    lapic_init(cpu());
-  setupsegs(0);
-  xchg(&cpus[cpu()].booted, 1);
+  xchg(&cpu->booted, 1);
 
-  cprintf("cpu%d: scheduling\n");
+  cprintf("cpu%d: scheduling\n", cpu->id);
   scheduler();
 }
 
@@ -69,14 +67,14 @@ bootothers(void)
   memmove(code, _binary_bootother_start, (uint)_binary_bootother_size);
 
   for(c = cpus; c < cpus+ncpu; c++){
-    if(c == cpus+cpu())  // We've started already.
+    if(c == cpus+cpunum())  // We've started already.
       continue;
 
     // Fill in %esp, %eip and start code on cpu.
     stack = kalloc(KSTACKSIZE);
     *(void**)(code-4) = stack + KSTACKSIZE;
     *(void**)(code-8) = mpmain;
-    lapic_startap(c->apicid, (uint)code);
+    lapicstartap(c->id, (uint)code);
 
     // Wait for cpu to get through bootstrap.
     while(c->booted == 0)

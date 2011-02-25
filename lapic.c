@@ -45,20 +45,20 @@ lapicw(int index, int value)
 }
 
 void
-lapic_init(int c)
+lapicinit(int c)
 {
   if(!lapic) 
     return;
 
   // Enable local APIC; set spurious interrupt vector.
-  lapicw(SVR, ENABLE | (IRQ_OFFSET+IRQ_SPURIOUS));
+  lapicw(SVR, ENABLE | (T_IRQ0 + IRQ_SPURIOUS));
 
   // The timer repeatedly counts down at bus frequency
   // from lapic[TICR] and then issues an interrupt.  
   // If xv6 cared more about precise timekeeping,
   // TICR would be calibrated using an external time source.
   lapicw(TDCR, X1);
-  lapicw(TIMER, PERIODIC | (IRQ_OFFSET + IRQ_TIMER));
+  lapicw(TIMER, PERIODIC | (T_IRQ0 + IRQ_TIMER));
   lapicw(TICR, 10000000); 
 
   // Disable logical interrupt lines.
@@ -71,7 +71,7 @@ lapic_init(int c)
     lapicw(PCINT, MASKED);
 
   // Map error interrupt to IRQ_ERROR.
-  lapicw(ERROR, IRQ_OFFSET+IRQ_ERROR);
+  lapicw(ERROR, T_IRQ0 + IRQ_ERROR);
 
   // Clear error status register (requires back-to-back writes).
   lapicw(ESR, 0);
@@ -91,18 +91,18 @@ lapic_init(int c)
 }
 
 int
-cpu(void)
+cpunum(void)
 {
   // Cannot call cpu when interrupts are enabled:
   // result not guaranteed to last long enough to be used!
   // Would prefer to panic but even printing is chancy here:
-  // everything, including cprintf, calls cpu, at least indirectly
-  // through acquire and release.
-  if(read_eflags()&FL_IF){
+  // almost everything, including cprintf and panic, calls cpu,
+  // often indirectly through acquire and release.
+  if(readeflags()&FL_IF){
     static int n;
     if(n++ == 0)
       cprintf("cpu called from %x with interrupts enabled\n",
-        ((uint*)read_ebp())[1]);
+        __builtin_return_address(0));
   }
 
   if(lapic)
@@ -112,7 +112,7 @@ cpu(void)
 
 // Acknowledge interrupt.
 void
-lapic_eoi(void)
+lapiceoi(void)
 {
   if(lapic)
     lapicw(EOI, 0);
@@ -120,13 +120,9 @@ lapic_eoi(void)
 
 // Spin for a given number of microseconds.
 // On real hardware would want to tune this dynamically.
-static void
+void
 microdelay(int us)
 {
-  volatile int j = 0;
-  
-  while(us-- > 0)
-    for(j=0; j<10000; j++);
 }
 
 
@@ -135,7 +131,7 @@ microdelay(int us)
 // Start additional processor running bootstrap code at addr.
 // See Appendix B of MultiProcessor Specification.
 void
-lapic_startap(uchar apicid, uint addr)
+lapicstartap(uchar apicid, uint addr)
 {
   int i;
   ushort *wrv;
@@ -155,7 +151,7 @@ lapic_startap(uchar apicid, uint addr)
   lapicw(ICRLO, INIT | LEVEL | ASSERT);
   microdelay(200);
   lapicw(ICRLO, INIT | LEVEL);
-  microdelay(100);	// should be 10ms, but too slow in Bochs!
+  microdelay(100);    // should be 10ms, but too slow in Bochs!
   
   // Send startup IPI (twice!) to enter bootstrap code.
   // Regular hardware is supposed to only accept a STARTUP

@@ -1,4 +1,5 @@
 #include "types.h"
+#include "x86.h"
 #include "defs.h"
 #include "param.h"
 #include "mmu.h"
@@ -7,14 +8,7 @@
 int
 sys_fork(void)
 {
-  int pid;
-  struct proc *np;
-
-  if((np = copyproc(cp)) == 0)
-    return -1;
-  pid = np->pid;
-  np->state = RUNNABLE;
-  return pid;
+  return fork();
 }
 
 int
@@ -43,7 +37,7 @@ sys_kill(void)
 int
 sys_getpid(void)
 {
-  return cp->pid;
+  return proc->pid;
 }
 
 int
@@ -54,7 +48,8 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
-  if((addr = growproc(n)) < 0)
+  addr = proc->sz;
+  if(growproc(n) < 0)
     return -1;
   return addr;
 }
@@ -69,7 +64,7 @@ sys_sleep(void)
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
-    if(cp->killed){
+    if(proc->killed){
       release(&tickslock);
       return -1;
     }

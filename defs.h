@@ -14,9 +14,9 @@ void            brelse(struct buf*);
 void            bwrite(struct buf*);
 
 // console.c
-void            console_init(void);
+void            consoleinit(void);
 void            cprintf(char*, ...);
-void            console_intr(int(*)(void));
+void            consoleintr(int(*)(void));
 void            panic(char*) __attribute__((noreturn));
 
 // exec.c
@@ -50,14 +50,14 @@ void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint, uint);
 
 // ide.c
-void            ide_init(void);
-void            ide_intr(void);
-void            ide_rw(struct buf *);
+void            ideinit(void);
+void            ideintr(void);
+void            iderw(struct buf*);
 
 // ioapic.c
-void            ioapic_enable(int irq, int cpu);
-extern uchar    ioapic_id;
-void            ioapic_init(void);
+void            ioapicenable(int irq, int cpu);
+extern uchar    ioapicid;
+void            ioapicinit(void);
 
 // kalloc.c
 char*           kalloc(int);
@@ -65,24 +65,25 @@ void            kfree(char*, int);
 void            kinit(void);
 
 // kbd.c
-void            kbd_intr(void);
+void            kbdintr(void);
 
 // lapic.c
-int             cpu(void);
+int             cpunum(void);
 extern volatile uint*    lapic;
-void            lapic_eoi(void);
-void            lapic_init(int);
-void            lapic_startap(uchar, uint);
+void            lapiceoi(void);
+void            lapicinit(int);
+void            lapicstartap(uchar, uint);
+void            microdelay(int);
 
 // mp.c
 extern int      ismp;
-int             mp_bcpu(void);
-void            mp_init(void);
-void            mp_startthem(void);
+int             mpbcpu(void);
+void            mpinit(void);
+void            mpstartthem(void);
 
 // picirq.c
-void            pic_enable(int);
-void            pic_init(void);
+void            picenable(int);
+void            picinit(void);
 
 // pipe.c
 int             pipealloc(struct file**, struct file**);
@@ -92,14 +93,15 @@ int             pipewrite(struct pipe*, char*, int);
 
 // proc.c
 struct proc*    copyproc(struct proc*);
-struct proc*    curproc(void);
 void            exit(void);
+int             fork(void);
 int             growproc(int);
 int             kill(int);
 void            pinit(void);
 void            procdump(void);
 void            scheduler(void) __attribute__((noreturn));
-void            setupsegs(struct proc*);
+void            ksegment(void);
+void            usegment(void);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(void);
@@ -107,7 +109,7 @@ void            wakeup(void*);
 void            yield(void);
 
 // swtch.S
-void            swtch(struct context*, struct context*);
+void            swtch(struct context**, struct context*);
 
 // spinlock.c
 void            acquire(struct spinlock*);
@@ -136,13 +138,18 @@ int             fetchstr(struct proc*, uint, char**);
 void            syscall(void);
 
 // timer.c
-void            timer_init(void);
+void            timerinit(void);
 
 // trap.c
 void            idtinit(void);
 extern int      ticks;
 void            tvinit(void);
 extern struct spinlock tickslock;
+
+// uart.c
+void            uartinit(void);
+void            uartintr(void);
+void            uartputc(int);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

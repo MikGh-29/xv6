@@ -23,10 +23,11 @@ OBJS = \
 	timer.o\
 	trapasm.o\
 	trap.o\
+	uart.o\
 	vectors.o\
 
 # Cross-compiling (e.g., on Mac OS X)
-# TOOLPREFIX = i386-jos-elf-
+#TOOLPREFIX = i386-jos-elf-
 
 # Using native tools (e.g., on X86 Linux)
 TOOLPREFIX = 
@@ -36,7 +37,7 @@ AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
-CFLAGS = -fno-builtin -O2 -Wall -MD -ggdb -m32
+CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 ASFLAGS = -m32
 # FreeBSD ld wants ``elf_i386_fbsd''
@@ -48,11 +49,11 @@ xv6.img: bootblock kernel fs.img
 	dd if=kernel of=xv6.img seek=1 conv=notrunc
 
 bootblock: bootasm.S bootmain.c
-	$(CC) $(CFLAGS) -O -nostdinc -I. -c bootmain.c
-	$(CC) $(CFLAGS) -nostdinc -I. -c bootasm.S
+	$(CC) $(CFLAGS) -fno-pic -O -nostdinc -I. -c bootmain.c
+	$(CC) $(CFLAGS) -fno-pic -nostdinc -I. -c bootasm.S
 	$(LD) $(LDFLAGS) -N -e start -Ttext 0x7C00 -o bootblock.o bootasm.o bootmain.o
 	$(OBJDUMP) -S bootblock.o > bootblock.asm
-	$(OBJCOPY) -S -O binary bootblock.o bootblock
+	$(OBJCOPY) -S -O binary -j .text bootblock.o bootblock
 	./sign.pl bootblock
 
 bootother: bootother.S
@@ -92,7 +93,7 @@ _forktest: forktest.o $(ULIB)
 	$(OBJDUMP) -S _forktest > forktest.asm
 
 mkfs: mkfs.c fs.h
-	gcc $(CFLAGS) -Wall -o mkfs mkfs.c
+	gcc -Wall -o mkfs mkfs.c
 
 UPROGS=\
 	_cat\
@@ -127,6 +128,7 @@ PRINT = runoff.list $(FILES)
 
 xv6.pdf: $(PRINT)
 	./runoff
+	ls -l xv6.pdf
 
 print: xv6.pdf
 
@@ -136,6 +138,20 @@ bochs : fs.img xv6.img
 	if [ ! -e .bochsrc ]; then ln -s dot-bochsrc .bochsrc; fi
 	bochs -q
 
+# try to generate a unique GDB port
+GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+QEMUOPTS = -smp 2 -hdb fs.img xv6.img
+
 qemu: fs.img xv6.img
-	qemu -parallel stdio -hdb fs.img xv6.img
+	qemu -parallel mon:stdio $(QEMUOPTS)
+
+qemutty: fs.img xv6.img
+	qemu -nographic $(QEMUOPTS)
+
+.gdbinit: .gdbinit.tmpl
+	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
+
+qemu-gdb: fs.img xv6.img .gdbinit
+	@echo "*** Now run 'gdb'." 1>&2
+	qemu -parallel mon:stdio $(QEMUOPTS) -s -S -p $(GDBPORT)
 

@@ -5,15 +5,15 @@
 # memory at physical address 0x7c00 and starts executing in real mode
 # with %cs=0 %ip=7c00.
 
-.set PROT_MODE_CSEG, 0x8         # kernel code segment selector
-.set PROT_MODE_DSEG, 0x10        # kernel data segment selector
-.set CR0_PE_ON,      0x1         # protected mode enable flag
+#define SEG_KCODE 1  // kernel code
+#define SEG_KDATA 2  // kernel data+stack
 
+#define CR0_PE    1  // protected mode enable bit
+
+.code16                       # Assemble for 16-bit mode
 .globl start
 start:
-  .code16                     # Assemble for 16-bit mode
   cli                         # Disable interrupts
-  cld                         # String operations increment
 
   # Set up the important data segment registers (DS, ES, SS).
   xorw    %ax,%ax             # Segment number zero
@@ -47,28 +47,35 @@ seta20.2:
   # effective memory map does not change during the switch.
   lgdt    gdtdesc
   movl    %cr0, %eax
-  orl     $CR0_PE_ON, %eax
+  orl     $CR0_PE, %eax
   movl    %eax, %cr0
   
   # Jump to next instruction, but in 32-bit code segment.
   # Switches processor into 32-bit mode.
-  ljmp    $PROT_MODE_CSEG, $protcseg
+  ljmp    $(SEG_KCODE<<3), $start32
 
-  .code32                     # Assemble for 32-bit mode
-protcseg:
+.code32                       # Assemble for 32-bit mode
+start32:
   # Set up the protected-mode data segment registers
-  movw    $PROT_MODE_DSEG, %ax    # Our data segment selector
+  movw    $(SEG_KDATA<<3), %ax    # Our data segment selector
   movw    %ax, %ds                # -> DS: Data Segment
   movw    %ax, %es                # -> ES: Extra Segment
+  movw    %ax, %ss                # -> SS: Stack Segment
+  movw    $0, %ax                 # Zero segments not ready for use
   movw    %ax, %fs                # -> FS
   movw    %ax, %gs                # -> GS
-  movw    %ax, %ss                # -> SS: Stack Segment
-  
+
   # Set up the stack pointer and call into C.
   movl    $start, %esp
   call    bootmain
 
-  # If bootmain returns (it shouldn't), loop.
+  # If bootmain returns (it shouldn't), trigger a Bochs
+  # breakpoint if running under Bochs, then loop.
+  movw    $0x8a00, %ax            # 0x8a00 -> port 0x8a00
+  movw    %ax, %dx
+  outw    %ax, %dx
+  movw    $0x8e00, %ax            # 0x8e00 -> port 0x8a00
+  outw    %ax, %dx
 spin:
   jmp     spin
 
@@ -80,5 +87,5 @@ gdt:
   SEG_ASM(STA_W, 0x0, 0xffffffff)         # data seg
 
 gdtdesc:
-  .word   0x17                            # sizeof(gdt) - 1
+  .word   (gdtdesc - gdt - 1)                            # sizeof(gdt) - 1
   .long   gdt                             # address gdt

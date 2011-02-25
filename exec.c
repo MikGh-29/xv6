@@ -16,19 +16,21 @@ exec(char *path, char **argv)
   struct inode *ip;
   struct proghdr ph;
 
+  mem = 0;
+  sz = 0;
+
   if((ip = namei(path)) == 0)
     return -1;
   ilock(ip);
 
-  // Compute memory size of new process.
-  mem = 0;
-  sz = 0;
-
-  // Program segments.
+  // Check ELF header
   if(readi(ip, (char*)&elf, 0, sizeof(elf)) < sizeof(elf))
     goto bad;
   if(elf.magic != ELF_MAGIC)
     goto bad;
+
+  // Compute memory size of new process.
+  // Program segments.
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
     if(readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
@@ -44,7 +46,10 @@ exec(char *path, char **argv)
   for(argc=0; argv[argc]; argc++)
     arglen += strlen(argv[argc]) + 1;
   arglen = (arglen+3) & ~3;
-  sz += arglen + 4*(argc+1);
+  sz += arglen;
+  sz += 4*(argc+1);  // argv data
+  sz += 4;  // argv
+  sz += 4;  // argc
 
   // Stack.
   sz += PAGE;
@@ -62,7 +67,9 @@ exec(char *path, char **argv)
       goto bad;
     if(ph.type != ELF_PROG_LOAD)
       continue;
-    if(ph.va + ph.memsz > sz)
+    if(ph.va + ph.memsz < ph.va || ph.va + ph.memsz > sz)
+      goto bad;
+    if(ph.memsz < ph.filesz)
       goto bad;
     if(readi(ip, mem + ph.va, ph.offset, ph.filesz) != ph.filesz)
       goto bad;
@@ -96,15 +103,15 @@ exec(char *path, char **argv)
   for(last=s=path; *s; s++)
     if(*s == '/')
       last = s+1;
-  safestrcpy(cp->name, last, sizeof(cp->name));
+  safestrcpy(proc->name, last, sizeof(proc->name));
 
   // Commit to the new image.
-  kfree(cp->mem, cp->sz);
-  cp->mem = mem;
-  cp->sz = sz;
-  cp->tf->eip = elf.entry;  // main
-  cp->tf->esp = sp;
-  setupsegs(cp);
+  kfree(proc->mem, proc->sz);
+  proc->mem = mem;
+  proc->sz = sz;
+  proc->tf->eip = elf.entry;  // main
+  proc->tf->esp = sp;
+  usegment();
   return 0;
 
  bad:

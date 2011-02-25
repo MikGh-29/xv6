@@ -27,29 +27,31 @@
 #include "spinlock.h"
 #include "buf.h"
 
-struct buf buf[NBUF];
-struct spinlock buf_table_lock;
+struct {
+  struct spinlock lock;
+  struct buf buf[NBUF];
 
-// Linked list of all buffers, through prev/next.
-// bufhead->next is most recently used.
-// bufhead->tail is least recently used.
-struct buf bufhead;
+  // Linked list of all buffers, through prev/next.
+  // head.next is most recently used.
+  struct buf head;
+} bcache;
 
 void
 binit(void)
 {
   struct buf *b;
 
-  initlock(&buf_table_lock, "buf_table");
+  initlock(&bcache.lock, "bcache");
 
   // Create linked list of buffers
-  bufhead.prev = &bufhead;
-  bufhead.next = &bufhead;
-  for(b = buf; b < buf+NBUF; b++){
-    b->next = bufhead.next;
-    b->prev = &bufhead;
-    bufhead.next->prev = b;
-    bufhead.next = b;
+  bcache.head.prev = &bcache.head;
+  bcache.head.next = &bcache.head;
+  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
+    b->next = bcache.head.next;
+    b->prev = &bcache.head;
+    b->dev = -1;
+    bcache.head.next->prev = b;
+    bcache.head.next = b;
   }
 }
 
@@ -61,30 +63,29 @@ bget(uint dev, uint sector)
 {
   struct buf *b;
 
-  acquire(&buf_table_lock);
+  acquire(&bcache.lock);
 
  loop:
   // Try for cached block.
-  for(b = bufhead.next; b != &bufhead; b = b->next){
-    if((b->flags & (B_BUSY|B_VALID)) &&
-       b->dev == dev && b->sector == sector){
-      if(b->flags & B_BUSY){
-        sleep(buf, &buf_table_lock);
-        goto loop;
+  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+    if(b->dev == dev && b->sector == sector){
+      if(!(b->flags & B_BUSY)){
+        b->flags |= B_BUSY;
+        release(&bcache.lock);
+        return b;
       }
-      b->flags |= B_BUSY;
-      release(&buf_table_lock);
-      return b;
+      sleep(b, &bcache.lock);
+      goto loop;
     }
   }
 
   // Allocate fresh block.
-  for(b = bufhead.prev; b != &bufhead; b = b->prev){
+  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
     if((b->flags & B_BUSY) == 0){
-      b->flags = B_BUSY;
       b->dev = dev;
       b->sector = sector;
-      release(&buf_table_lock);
+      b->flags = B_BUSY;
+      release(&bcache.lock);
       return b;
     }
   }
@@ -99,39 +100,39 @@ bread(uint dev, uint sector)
 
   b = bget(dev, sector);
   if(!(b->flags & B_VALID))
-    ide_rw(b);
+    iderw(b);
   return b;
 }
 
-// Write buf's contents to disk.  Must be locked.
+// Write b's contents to disk.  Must be locked.
 void
 bwrite(struct buf *b)
 {
   if((b->flags & B_BUSY) == 0)
     panic("bwrite");
   b->flags |= B_DIRTY;
-  ide_rw(b);
+  iderw(b);
 }
 
-// Release the buffer buf.
+// Release the buffer b.
 void
 brelse(struct buf *b)
 {
   if((b->flags & B_BUSY) == 0)
     panic("brelse");
 
-  acquire(&buf_table_lock);
+  acquire(&bcache.lock);
 
   b->next->prev = b->prev;
   b->prev->next = b->next;
-  b->next = bufhead.next;
-  b->prev = &bufhead;
-  bufhead.next->prev = b;
-  bufhead.next = b;
+  b->next = bcache.head.next;
+  b->prev = &bcache.head;
+  bcache.head.next->prev = b;
+  bcache.head.next = b;
 
   b->flags &= ~B_BUSY;
-  wakeup(buf);
+  wakeup(b);
 
-  release(&buf_table_lock);
+  release(&bcache.lock);
 }
 

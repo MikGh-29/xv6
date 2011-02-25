@@ -5,6 +5,7 @@
 // Block 1 is super block.
 // Inodes start at block 2.
 
+#define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
 
 // File system super block
@@ -14,11 +15,9 @@ struct superblock {
   uint ninodes;      // Number of inodes.
 };
 
-#define NADDRS (NDIRECT+1)
 #define NDIRECT 12
-#define INDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
-#define MAXFILE (NDIRECT  + NINDIRECT)
+#define MAXFILE (NDIRECT + NINDIRECT)
 
 // On-disk inode structure
 struct dinode {
@@ -27,12 +26,8 @@ struct dinode {
   short minor;          // Minor device number (T_DEV only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NADDRS];   // Data block addresses
+  uint addrs[NDIRECT+1];   // Data block addresses
 };
-
-#define T_DIR  1   // Directory
-#define T_FILE 2   // File
-#define T_DEV  3   // Special device
 
 // Inodes per block.
 #define IPB           (BSIZE / sizeof(struct dinode))

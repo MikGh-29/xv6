@@ -1,46 +1,46 @@
-// Segments in proc->gdt
+// Segments in proc->gdt.
+// Also known to bootasm.S and trapasm.S
 #define SEG_KCODE 1  // kernel code
 #define SEG_KDATA 2  // kernel data+stack
-#define SEG_UCODE 3
-#define SEG_UDATA 4
-#define SEG_TSS   5  // this process's task state
-#define NSEGS     6
+#define SEG_KCPU  3  // kernel per-cpu data
+#define SEG_UCODE 4
+#define SEG_UDATA 5
+#define SEG_TSS   6  // this process's task state
+#define NSEGS     7
 
 // Saved registers for kernel context switches.
-// Don't need to save all the %fs etc. segment registers,
+// Don't need to save all the segment registers (%cs, etc),
 // because they are constant across kernel contexts.
-// Save all the regular registers so we don't need to care
-// which are caller save, but not the return register %eax.
-// (Not saving %eax just simplifies the switching code.)
-// The layout of context must match code in swtch.S.
+// Don't need to save %eax, %ecx, %edx, because the
+// x86 convention is that the caller has saved them.
+// Contexts are stored at the bottom of the stack they
+// describe; the stack pointer is the address of the context.
+// The layout of the context must match the code in swtch.S.
 struct context {
-  int eip;
-  int esp;
-  int ebx;
-  int ecx;
-  int edx;
-  int esi;
-  int edi;
-  int ebp;
+  uint edi;
+  uint esi;
+  uint ebx;
+  uint ebp;
+  uint eip;
 };
 
-enum proc_state { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
 struct proc {
-  char *mem;                // Start of process memory (kernel address)
-  uint sz;                  // Size of process memory (bytes)
-  char *kstack;             // Bottom of kernel stack for this process
-  enum proc_state state;    // Process state
-  int pid;                  // Process ID
-  struct proc *parent;      // Parent process
-  void *chan;               // If non-zero, sleeping on chan
-  int killed;               // If non-zero, have been killed
+  char *mem;                   // Start of process memory (kernel address)
+  uint sz;                     // Size of process memory (bytes)
+  char *kstack;                // Bottom of kernel stack for this process
+  enum procstate state;        // Process state
+  volatile int pid;            // Process ID
+  struct proc *parent;         // Parent process
+  struct trapframe *tf;        // Trap frame for current syscall
+  struct context *context;     // Switch here to run process
+  void *chan;                  // If non-zero, sleeping on chan
+  int killed;                  // If non-zero, have been killed
   struct file *ofile[NOFILE];  // Open files
-  struct inode *cwd;        // Current directory
-  struct context context;   // Switch here to run process
-  struct trapframe *tf;     // Trap frame for current interrupt
-  char name[16];            // Process name (debugging)
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -51,19 +51,29 @@ struct proc {
 
 // Per-CPU state
 struct cpu {
-  uchar apicid;               // Local APIC ID
-  struct proc *curproc;       // Process currently running.
-  struct context context;     // Switch here to enter scheduler
-  struct taskstate ts;        // Used by x86 to find stack for interrupt
-  struct segdesc gdt[NSEGS];  // x86 global descriptor table
+  uchar id;                    // Local APIC ID; index into cpus[] below
+  struct context *scheduler;   // Switch here to enter scheduler
+  struct taskstate ts;         // Used by x86 to find stack for interrupt
+  struct segdesc gdt[NSEGS];   // x86 global descriptor table
   volatile uint booted;        // Has the CPU started?
-  int ncli;                   // Depth of pushcli nesting.
-  int intena;                 // Were interrupts enabled before pushcli? 
+  int ncli;                    // Depth of pushcli nesting.
+  int intena;                  // Were interrupts enabled before pushcli?
+  
+  // Cpu-local storage variables; see below
+  struct cpu *cpu;
+  struct proc *proc;
 };
 
 extern struct cpu cpus[NCPU];
 extern int ncpu;
 
-// "cp" is a short alias for curproc().
-// It gets used enough to make this worthwhile.
-#define cp curproc()
+// Per-CPU variables, holding pointers to the
+// current cpu and to the current process.
+// The asm suffix tells gcc to use "%gs:0" to refer to cpu
+// and "%gs:4" to refer to proc.  ksegment sets up the
+// %gs segment register so that %gs refers to the memory
+// holding those two variables in the local cpu's struct cpu.
+// This is similar to how thread-local variables are implemented
+// in thread libraries such as Linux pthreads.
+extern struct cpu *cpu asm("%gs:0");       // This cpu.
+extern struct proc *proc asm("%gs:4");     // Current proc on this cpu.
