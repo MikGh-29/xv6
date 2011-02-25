@@ -256,6 +256,7 @@ preempt(void)
   int pid1, pid2, pid3;
   int pfds[2];
 
+  printf(1, "preempt: ");
   pid1 = fork();
   if(pid1 == 0)
     for(;;)
@@ -283,9 +284,11 @@ preempt(void)
     return;
   }
   close(pfds[0]);
+  printf(1, "kill... ");
   kill(pid1);
   kill(pid2);
   kill(pid3);
+  printf(1, "wait... ");
   wait();
   wait();
   wait();
@@ -1231,7 +1234,7 @@ int
 main(int argc, char *argv[])
 {
   printf(1, "usertests starting\n");
-  
+
   if(open("usertests.ran", 0) >= 0){
     printf(1, "already ran user tests -- rebuild fs.img\n");
     exit();
@@ -1252,7 +1255,6 @@ main(int argc, char *argv[])
   fourteen();
   bigfile();
   subdir();
-  bigdir(); // slow
   concreate();
   linktest();
   unlinkread();
@@ -1262,6 +1264,7 @@ main(int argc, char *argv[])
   dirfile();
   iref();
   forktest();
+  bigdir(); // slow
 
   exectest();
 

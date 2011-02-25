@@ -6,30 +6,19 @@
 #include "x86.h"
 
 static void bootothers(void);
+static void mpmain(void) __attribute__((noreturn));
 
 // Bootstrap processor starts running C code here.
 int
 main(void)
 {
-  int i;
-  static volatile int bcpu;  // cannot be on stack
   extern char edata[], end[];
 
   // clear BSS
   memset(edata, 0, end - edata);
 
-  // Prevent release() from enabling interrupts.
-  for(i=0; i<NCPU; i++)
-    cpus[i].nlock = 1;
-
   mp_init(); // collect info about this machine
-  bcpu = mp_bcpu();
-
-  // Switch to bootstrap processor's stack
-  asm volatile("movl %0, %%esp" : : "r" (cpus[bcpu].mpstack+MPSTACK-32));
-  asm volatile("movl %0, %%ebp" : : "r" (cpus[bcpu].mpstack+MPSTACK));
-
-  lapic_init(bcpu);
+  lapic_init(mp_bcpu());
   cprintf("\ncpu%d: starting xv6\n\n", cpu());
 
   pinit();         // process table
@@ -38,39 +27,32 @@ main(void)
   ioapic_init();   // another interrupt controller
   kinit();         // physical memory allocator
   tvinit();        // trap vectors
-  idtinit();       // interrupt descriptor table
   fileinit();      // file table
   iinit();         // inode cache
-  setupsegs(0);    // segments & TSS
   console_init();  // I/O devices & their interrupts
   ide_init();      // disk
-  bootothers();    // boot other CPUs
   if(!ismp)
-    timer_init(); // uniprocessor timer
+    timer_init();  // uniprocessor timer
   userinit();      // first user process
+  bootothers();    // start other processors
 
-  // enable interrupts on this processor.
-  cpus[cpu()].nlock--;
-  sti();
-
-  scheduler();
+  // Finish setting up this processor in mpmain.
+  mpmain();
 }
 
+// Bootstrap processor gets here after setting up the hardware.
 // Additional processors start here.
 static void
 mpmain(void)
 {
-  cprintf("cpu%d: starting\n", cpu());
+  cprintf("cpu%d: mpmain\n", cpu());
   idtinit();
-  lapic_init(cpu());
+  if(cpu() != mp_bcpu())
+    lapic_init(cpu());
   setupsegs(0);
-  cpuid(0, 0, 0, 0, 0);  // memory barrier
-  cpus[cpu()].booted = 1;
+  xchg(&cpus[cpu()].booted, 1);
 
-  // Enable interrupts on this processor.
-  cpus[cpu()].nlock--;
-  sti();
-
+  cprintf("cpu%d: scheduling\n");
   scheduler();
 }
 
@@ -80,6 +62,7 @@ bootothers(void)
   extern uchar _binary_bootother_start[], _binary_bootother_size[];
   uchar *code;
   struct cpu *c;
+  char *stack;
 
   // Write bootstrap code to unused memory at 0x7000.
   code = (uchar*)0x7000;
@@ -90,7 +73,8 @@ bootothers(void)
       continue;
 
     // Fill in %esp, %eip and start code on cpu.
-    *(void**)(code-4) = c->mpstack + MPSTACK;
+    stack = kalloc(KSTACKSIZE);
+    *(void**)(code-4) = stack + KSTACKSIZE;
     *(void**)(code-8) = mpmain;
     lapic_startap(c->apicid, (uint)code);
 

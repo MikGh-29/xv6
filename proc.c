@@ -9,7 +9,6 @@
 struct spinlock proc_table_lock;
 
 struct proc proc[NPROC];
-struct proc *curproc[NCPU];
 static struct proc *initproc;
 
 int nextpid = 1;
@@ -61,6 +60,7 @@ growproc(int n)
   cp->mem = newmem;
   kfree(oldmem, cp->sz);
   cp->sz += n;
+  setupsegs(cp);
   return cp->sz - n;
 }
 
@@ -71,6 +71,7 @@ setupsegs(struct proc *p)
 {
   struct cpu *c;
   
+  pushcli();
   c = &cpus[cpu()];
   c->ts.ss0 = SEG_KDATA << 3;
   if(p)
@@ -93,6 +94,7 @@ setupsegs(struct proc *p)
 
   lgdt(c->gdt, sizeof(c->gdt));
   ltr(SEG_TSS << 3);
+  popcli();
 }
 
 // Create a new process copying p as the parent.
@@ -176,23 +178,39 @@ userinit(void)
   initproc = p;
 }
 
+// Return currently running process.
+struct proc*
+curproc(void)
+{
+  struct proc *p;
+
+  pushcli();
+  p = cpus[cpu()].curproc;
+  popcli();
+  return p;
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
 //  - choose a process to run
-//  - longjmp to start running that process
-//  - eventually that process transfers control back
-//      via longjmp back to the scheduler.
+//  - swtch to start running that process
+//  - eventually that process transfers control
+//      via swtch back to the scheduler.
 void
 scheduler(void)
 {
   struct proc *p;
+  struct cpu *c;
   int i;
 
+  c = &cpus[cpu()];
   for(;;){
+    // Enable interrupts on this processor.
+    sti();
+
     // Loop over process table looking for process to run.
     acquire(&proc_table_lock);
-
     for(i = 0; i < NPROC; i++){
       p = &proc[i];
       if(p->state != RUNNABLE)
@@ -201,18 +219,18 @@ scheduler(void)
       // Switch to chosen process.  It is the process's job
       // to release proc_table_lock and then reacquire it
       // before jumping back to us.
-      cp = p;
+      c->curproc = p;
       setupsegs(p);
       p->state = RUNNING;
-      swtch(&cpus[cpu()].context, &p->context);
+      swtch(&c->context, &p->context);
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
-      cp = 0;
+      c->curproc = 0;
       setupsegs(0);
     }
-
     release(&proc_table_lock);
+
   }
 }
 
@@ -221,11 +239,13 @@ scheduler(void)
 void
 sched(void)
 {
+  if(read_eflags()&FL_IF)
+    panic("sched interruptible");
   if(cp->state == RUNNING)
     panic("sched running");
   if(!holding(&proc_table_lock))
     panic("sched proc_table_lock");
-  if(cpus[cpu()].nlock != 1)
+  if(cpus[cpu()].ncli != 1)
     panic("sched locks");
 
   swtch(&cp->context, &cpus[cpu()].context);
@@ -242,7 +262,7 @@ yield(void)
 }
 
 // A fork child's very first scheduling by scheduler()
-// will longjmp here.  "Return" to user space.
+// will swtch here.  "Return" to user space.
 void
 forkret(void)
 {
@@ -360,7 +380,7 @@ exit(void)
 
   acquire(&proc_table_lock);
 
-  // Parent might be sleeping in proc_wait.
+  // Parent might be sleeping in wait().
   wakeup1(cp->parent);
 
   // Pass abandoned children to init.

@@ -70,13 +70,9 @@ void            kbd_intr(void);
 // lapic.c
 int             cpu(void);
 extern volatile uint*    lapic;
-void            lapic_disableintr(void);
-void            lapic_enableintr(void);
 void            lapic_eoi(void);
 void            lapic_init(int);
 void            lapic_startap(uchar, uint);
-void            lapic_timerinit(void);
-void            lapic_timerintr(void);
 
 // mp.c
 extern int      ismp;
@@ -96,6 +92,7 @@ int             pipewrite(struct pipe*, char*, int);
 
 // proc.c
 struct proc*    copyproc(struct proc*);
+struct proc*    curproc(void);
 void            exit(void);
 int             growproc(int);
 int             kill(int);
@@ -118,6 +115,8 @@ void            getcallerpcs(void*, uint*);
 int             holding(struct spinlock*);
 void            initlock(struct spinlock*, char*);
 void            release(struct spinlock*);
+void            pushcli();
+void            popcli();
 
 // string.c
 int             memcmp(const void*, const void*, uint);

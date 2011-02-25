@@ -2,7 +2,10 @@
 // See Chapter 8 & Appendix C of Intel processor manual volume 3.
 
 #include "types.h"
+#include "defs.h"
 #include "traps.h"
+#include "mmu.h"
+#include "x86.h"
 
 // Local APIC registers, divided by 4 for use as uint[] indices.
 #define ID      (0x0020/4)   // ID
@@ -34,6 +37,13 @@
 
 volatile uint *lapic;  // Initialized in mp.c
 
+static void
+lapicw(int index, int value)
+{
+  lapic[index] = value;
+  lapic[ID];  // wait for write to finish, by reading
+}
+
 void
 lapic_init(int c)
 {
@@ -41,51 +51,60 @@ lapic_init(int c)
     return;
 
   // Enable local APIC; set spurious interrupt vector.
-  lapic[SVR] = ENABLE | (IRQ_OFFSET+IRQ_SPURIOUS);
+  lapicw(SVR, ENABLE | (IRQ_OFFSET+IRQ_SPURIOUS));
 
   // The timer repeatedly counts down at bus frequency
   // from lapic[TICR] and then issues an interrupt.  
-  // Lapic[TCCR] is the current counter value.
-  // If xv6 cared more about precise timekeeping, the
-  // values of TICR and TCCR would be calibrated using
-  // an external time source.
-  lapic[TDCR] = X1;
-  lapic[TICR] = 10000000;
-  lapic[TCCR] = 10000000;
-  lapic[TIMER] = PERIODIC | (IRQ_OFFSET + IRQ_TIMER);
+  // If xv6 cared more about precise timekeeping,
+  // TICR would be calibrated using an external time source.
+  lapicw(TDCR, X1);
+  lapicw(TIMER, PERIODIC | (IRQ_OFFSET + IRQ_TIMER));
+  lapicw(TICR, 10000000); 
 
   // Disable logical interrupt lines.
-  lapic[LINT0] = MASKED;
-  lapic[LINT1] = MASKED;
+  lapicw(LINT0, MASKED);
+  lapicw(LINT1, MASKED);
 
   // Disable performance counter overflow interrupts
   // on machines that provide that interrupt entry.
   if(((lapic[VER]>>16) & 0xFF) >= 4)
-    lapic[PCINT] = MASKED;
+    lapicw(PCINT, MASKED);
 
   // Map error interrupt to IRQ_ERROR.
-  lapic[ERROR] = IRQ_OFFSET+IRQ_ERROR;
+  lapicw(ERROR, IRQ_OFFSET+IRQ_ERROR);
 
   // Clear error status register (requires back-to-back writes).
-  lapic[ESR] = 0;
-  lapic[ESR] = 0;
+  lapicw(ESR, 0);
+  lapicw(ESR, 0);
 
   // Ack any outstanding interrupts.
-  lapic[EOI] = 0;
+  lapicw(EOI, 0);
 
   // Send an Init Level De-Assert to synchronise arbitration ID's.
-  lapic[ICRHI] = 0;
-  lapic[ICRLO] = BCAST | INIT | LEVEL;
+  lapicw(ICRHI, 0);
+  lapicw(ICRLO, BCAST | INIT | LEVEL);
   while(lapic[ICRLO] & DELIVS)
     ;
 
   // Enable interrupts on the APIC (but not on the processor).
-  lapic[TPR] = 0;
+  lapicw(TPR, 0);
 }
 
 int
 cpu(void)
 {
+  // Cannot call cpu when interrupts are enabled:
+  // result not guaranteed to last long enough to be used!
+  // Would prefer to panic but even printing is chancy here:
+  // everything, including cprintf, calls cpu, at least indirectly
+  // through acquire and release.
+  if(read_eflags()&FL_IF){
+    static int n;
+    if(n++ == 0)
+      cprintf("cpu called from %x with interrupts enabled\n",
+        ((uint*)read_ebp())[1]);
+  }
+
   if(lapic)
     return lapic[ID]>>24;
   return 0;
@@ -96,7 +115,7 @@ void
 lapic_eoi(void)
 {
   if(lapic)
-    lapic[EOI] = 0;
+    lapicw(EOI, 0);
 }
 
 // Spin for a given number of microseconds.
@@ -110,23 +129,42 @@ microdelay(int us)
     for(j=0; j<10000; j++);
 }
 
+
+#define IO_RTC  0x70
+
 // Start additional processor running bootstrap code at addr.
 // See Appendix B of MultiProcessor Specification.
 void
 lapic_startap(uchar apicid, uint addr)
 {
   int i;
-  volatile int j = 0;
+  ushort *wrv;
+  
+  // "The BSP must initialize CMOS shutdown code to 0AH
+  // and the warm reset vector (DWORD based at 40:67) to point at
+  // the AP startup code prior to the [universal startup algorithm]."
+  outb(IO_RTC, 0xF);  // offset 0xF is shutdown code
+  outb(IO_RTC+1, 0x0A);
+  wrv = (ushort*)(0x40<<4 | 0x67);  // Warm reset vector
+  wrv[0] = 0;
+  wrv[1] = addr >> 4;
 
-  // Send INIT interrupt to reset other CPU.
-  lapic[ICRHI] = apicid<<24;
-  lapic[ICRLO] = INIT | LEVEL;
-  microdelay(10);
+  // "Universal startup algorithm."
+  // Send INIT (level-triggered) interrupt to reset other CPU.
+  lapicw(ICRHI, apicid<<24);
+  lapicw(ICRLO, INIT | LEVEL | ASSERT);
+  microdelay(200);
+  lapicw(ICRLO, INIT | LEVEL);
+  microdelay(100);	// should be 10ms, but too slow in Bochs!
   
   // Send startup IPI (twice!) to enter bootstrap code.
+  // Regular hardware is supposed to only accept a STARTUP
+  // when it is in the halted state due to an INIT.  So the second
+  // should be ignored, but it is part of the official Intel algorithm.
+  // Bochs complains about the second one.  Too bad for Bochs.
   for(i = 0; i < 2; i++){
-    lapic[ICRHI] = apicid<<24;
-    lapic[ICRLO] = STARTUP | (addr>>12);
-    for(j=0; j<10000; j++);  // 200us
+    lapicw(ICRHI, apicid<<24);
+    lapicw(ICRLO, STARTUP | (addr>>12));
+    microdelay(200);
   }
 }

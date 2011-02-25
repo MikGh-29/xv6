@@ -20,7 +20,7 @@ tvinit(void)
 
   for(i = 0; i < 256; i++)
     SETGATE(idt[i], 0, SEG_KCODE<<3, vectors[i], 0);
-  SETGATE(idt[T_SYSCALL], 0, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
+  SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
   
   initlock(&tickslock, "time");
 }
@@ -44,10 +44,6 @@ trap(struct trapframe *tf)
     return;
   }
 
-  // Increment nlock to make sure interrupts stay off
-  // during interrupt handler.  Decrement before returning.
-  cpus[cpu()].nlock++;
-
   switch(tf->trapno){
   case IRQ_OFFSET + IRQ_TIMER:
     if(cpu() == 0){
@@ -67,23 +63,23 @@ trap(struct trapframe *tf)
     lapic_eoi();
     break;
   case IRQ_OFFSET + IRQ_SPURIOUS:
-    cprintf("spurious interrupt from cpu %d eip %x\n", cpu(), tf->eip);
+    cprintf("cpu%d: spurious interrupt at %x:%x\n",
+            cpu(), tf->cs, tf->eip);
     lapic_eoi();
     break;
     
   default:
-    if(cp == 0){
-      // Otherwise it's our mistake.
+    if(cp == 0 || (tf->cs&3) == 0){
+      // In kernel, it must be our mistake.
       cprintf("unexpected trap %d from cpu %d eip %x\n",
               tf->trapno, cpu(), tf->eip);
       panic("trap");
     }
-    // Assume process divided by zero or dereferenced null, etc.
+    // In user space, assume process misbehaved.
     cprintf("pid %d %s: trap %d err %d on cpu %d eip %x -- kill proc\n",
             cp->pid, cp->name, tf->trapno, tf->err, cpu(), tf->eip);
     cp->killed = 1;
   }
-  cpus[cpu()].nlock--;
 
   // Force process exit if it has been killed and is in user space.
   // (If it is still executing in the kernel, let it keep running 

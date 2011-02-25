@@ -71,7 +71,7 @@ cga_putc(int c)
   crt[pos] = ' ' | 0x0700;
 }
 
-static void
+void
 cons_putc(int c)
 {
   if(panicked){
@@ -219,7 +219,7 @@ console_intr(int (*getc)(void))
       break;
     default:
       if(c != 0 && input.e < input.r+INPUT_BUF){
-        input.buf[input.e++] = c;
+        input.buf[input.e++ % INPUT_BUF] = c;
         cons_putc(c);
         if(c == '\n' || c == C('D') || input.e == input.r+INPUT_BUF){
           input.w = input.e;
@@ -250,7 +250,7 @@ console_read(struct inode *ip, char *dst, int n)
       }
       sleep(&input.r, &input.lock);
     }
-    c = input.buf[input.r++];
+    c = input.buf[input.r++ % INPUT_BUF];
     if(c == C('D')){  // EOF
       if(n < target){
         // Save ^D for next time, to make sure
@@ -263,8 +263,6 @@ console_read(struct inode *ip, char *dst, int n)
     --n;
     if(c == '\n')
       break;
-    if(input.r >= INPUT_BUF)
-      input.r = 0;
   }
   release(&input.lock);
   ilock(ip);
@@ -280,7 +278,7 @@ console_init(void)
 
   devsw[CONSOLE].write = console_write;
   devsw[CONSOLE].read = console_read;
-  //use_console_lock = 1;
+  use_console_lock = 1;
 
   pic_enable(IRQ_KBD);
   ioapic_enable(IRQ_KBD, 0);
@@ -294,7 +292,7 @@ panic(char *s)
   
   __asm __volatile("cli");
   use_console_lock = 0;
-  cprintf("panic (%d): ", cpu());
+  cprintf("cpu%d: panic: ", cpu());
   cprintf(s, 0);
   cprintf("\n", 0);
   getcallerpcs(&s, pcs);
