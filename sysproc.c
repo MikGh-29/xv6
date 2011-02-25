@@ -1,26 +1,15 @@
 #include "types.h"
-#include "stat.h"
+#include "defs.h"
 #include "param.h"
 #include "mmu.h"
 #include "proc.h"
-#include "defs.h"
-#include "x86.h"
-#include "traps.h"
-#include "syscall.h"
-#include "spinlock.h"
-#include "buf.h"
-#include "fs.h"
-#include "fsvar.h"
-#include "elf.h"
-#include "file.h"
-#include "fcntl.h"
 
 int
 sys_fork(void)
 {
   struct proc *np;
 
-  if((np = copyproc(curproc[cpu()])) == 0)
+  if((np = copyproc(cp)) == 0)
     return -1;
   np->state = RUNNABLE;
   return np->pid;
@@ -29,14 +18,14 @@ sys_fork(void)
 int
 sys_exit(void)
 {
-  proc_exit();
+  exit();
   return 0;  // not reached
 }
 
 int
 sys_wait(void)
 {
-  return proc_wait();
+  return wait();
 }
 
 int
@@ -46,13 +35,13 @@ sys_kill(void)
 
   if(argint(0, &pid) < 0)
     return -1;
-  return proc_kill(pid);
+  return kill(pid);
 }
 
 int
 sys_getpid(void)
 {
-  return curproc[cpu()]->pid;
+  return cp->pid;
 }
 
 int
@@ -60,7 +49,6 @@ sys_sbrk(void)
 {
   int addr;
   int n;
-  struct proc *cp = curproc[cpu()];
 
   if(argint(0, &n) < 0)
     return -1;
@@ -68,4 +56,24 @@ sys_sbrk(void)
     return -1;
   setupsegs(cp);
   return addr;
+}
+
+int
+sys_sleep(void)
+{
+  int n, ticks0;
+  
+  if(argint(0, &n) < 0)
+    return -1;
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while(ticks - ticks0 < n){
+    if(cp->killed){
+      release(&tickslock);
+      return -1;
+    }
+    sleep(&ticks, &tickslock);
+  }
+  release(&tickslock);
+  return 0;
 }
