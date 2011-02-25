@@ -65,7 +65,7 @@ pipeclose(struct pipe *p, int writable)
     p->readopen = 0;
     wakeup(&p->nwrite);
   }
-  if(p->readopen == 0 && p->writeopen == 0) {
+  if(p->readopen == 0 && p->writeopen == 0){
     release(&p->lock);
     kfree((char*)p);
   } else
@@ -79,7 +79,7 @@ pipewrite(struct pipe *p, char *addr, int n)
 
   acquire(&p->lock);
   for(i = 0; i < n; i++){
-    while(p->nwrite == p->nread + PIPESIZE) {  //DOC: pipewrite-full
+    while(p->nwrite == p->nread + PIPESIZE){  //DOC: pipewrite-full
       if(p->readopen == 0 || proc->killed){
         release(&p->lock);
         return -1;
