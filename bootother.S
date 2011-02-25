@@ -44,8 +44,10 @@ start:
   orl     $CR0_PE, %eax
   movl    %eax, %cr0
 
-  # Jump to next instruction, but in 32-bit code segment.
-  # Switches processor into 32-bit mode.
+  # This ljmp is how you load the CS (Code Segment) register.
+  # SEG_ASM produces segment descriptors with the 32-bit mode
+  # flag set (the D flag), so addresses and word operands will
+  # default to 32 bits after this jump.
   ljmp    $(SEG_KCODE<<3), $start32
 
 .code32                       # Assemble for 32-bit mode
@@ -68,7 +70,7 @@ start32:
   movw    $0x8a00, %ax            # 0x8a00 -> port 0x8a00
   movw    %ax, %dx
   outw    %ax, %dx
-  movw    $0x8e00, %ax            # 0x8e00 -> port 0x8a00
+  movw    $0x8ae0, %ax            # 0x8ae0 -> port 0x8a00
   outw    %ax, %dx
 spin:
   jmp     spin

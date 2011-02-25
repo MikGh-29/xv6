@@ -18,7 +18,7 @@ fetchint(struct proc *p, uint addr, int *ip)
 {
   if(addr >= p->sz || addr+4 > p->sz)
     return -1;
-  *ip = *(int*)(p->mem + addr);
+  *ip = *(int*)(addr);
   return 0;
 }
 
@@ -32,8 +32,8 @@ fetchstr(struct proc *p, uint addr, char **pp)
 
   if(addr >= p->sz)
     return -1;
-  *pp = p->mem + addr;
-  ep = p->mem + p->sz;
+  *pp = (char *) addr;
+  ep = (char *) p->sz;
   for(s = *pp; s < ep; s++)
     if(*s == 0)
       return s - *pp;
@@ -44,7 +44,8 @@ fetchstr(struct proc *p, uint addr, char **pp)
 int
 argint(int n, int *ip)
 {
-  return fetchint(proc, proc->tf->esp + 4 + 4*n, ip);
+  int x = fetchint(proc, proc->tf->esp + 4 + 4*n, ip);
+  return x;
 }
 
 // Fetch the nth word-sized system call argument as a pointer
@@ -59,7 +60,7 @@ argptr(int n, char **pp, int size)
     return -1;
   if((uint)i >= proc->sz || (uint)i+size >= proc->sz)
     return -1;
-  *pp = proc->mem + i;
+  *pp = (char *) i;
   return 0;
 }
 
@@ -96,6 +97,7 @@ extern int sys_sleep(void);
 extern int sys_unlink(void);
 extern int sys_wait(void);
 extern int sys_write(void);
+extern int sys_uptime(void);
 
 static int (*syscalls[])(void) = {
 [SYS_chdir]   sys_chdir,
@@ -118,6 +120,7 @@ static int (*syscalls[])(void) = {
 [SYS_unlink]  sys_unlink,
 [SYS_wait]    sys_wait,
 [SYS_write]   sys_write,
+[SYS_uptime]  sys_uptime,
 };
 
 void

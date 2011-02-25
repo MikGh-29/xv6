@@ -90,6 +90,40 @@ readeflags(void)
   return eflags;
 }
 
+static inline void
+loadgs(ushort v)
+{
+  asm volatile("movw %0, %%gs" : : "r" (v));
+}
+
+static inline uint
+rebp(void)
+{
+  uint val;
+  asm volatile("movl %%ebp,%0" : "=r" (val));
+  return val;
+}
+
+static inline uint
+resp(void)
+{
+  uint val;
+  asm volatile("movl %%esp,%0" : "=r" (val));
+  return val;
+}
+
+static inline void
+cli(void)
+{
+  asm volatile("cli");
+}
+
+static inline void
+sti(void)
+{
+  asm volatile("sti");
+}
+
 static inline uint
 xchg(volatile uint *addr, uint newval)
 {
@@ -104,21 +138,39 @@ xchg(volatile uint *addr, uint newval)
 }
 
 static inline void
-loadgs(ushort v)
+lcr0(uint val)
 {
-  asm volatile("movw %0, %%gs" : : "r" (v));
+  asm volatile("movl %0,%%cr0" : : "r" (val));
+}
+
+static inline uint
+rcr0(void)
+{
+  uint val;
+  asm volatile("movl %%cr0,%0" : "=r" (val));
+  return val;
+}
+
+static inline uint
+rcr2(void)
+{
+  uint val;
+  asm volatile("movl %%cr2,%0" : "=r" (val));
+  return val;
 }
 
 static inline void
-cli(void)
+lcr3(uint val) 
 {
-  asm volatile("cli");
+  asm volatile("movl %0,%%cr3" : : "r" (val));
 }
 
-static inline void
-sti(void)
+static inline uint
+rcr3(void)
 {
-  asm volatile("sti");
+  uint val;
+  asm volatile("movl %%cr3,%0" : "=r" (val));
+  return val;
 }
 
 // Layout of the trap frame built on the stack by the

@@ -18,8 +18,8 @@ static void consputc(int);
 static int panicked = 0;
 
 static struct {
-	struct spinlock lock;
-	int locking;
+  struct spinlock lock;
+  int locking;
 } cons;
 
 static void
@@ -134,8 +134,7 @@ cgaputc(int c)
   if(c == '\n')
     pos += 80 - pos%80;
   else if(c == BACKSPACE){
-    if(pos > 0)
-      crt[--pos] = ' ' | 0x0700;
+    if(pos > 0) --pos;
   } else
     crt[pos++] = (c&0xff) | 0x0700;  // black on white
   
@@ -161,7 +160,10 @@ consputc(int c)
       ;
   }
 
-  uartputc(c);
+  if(c == BACKSPACE){
+    uartputc('\b'); uartputc(' '); uartputc('\b');
+  } else
+    uartputc(c);
   cgaputc(c);
 }
 
@@ -194,7 +196,7 @@ consoleintr(int (*getc)(void))
         consputc(BACKSPACE);
       }
       break;
-    case C('H'):  // Backspace
+    case C('H'): case '\x7f':  // Backspace
       if(input.e != input.w){
         input.e--;
         consputc(BACKSPACE);
@@ -202,6 +204,7 @@ consoleintr(int (*getc)(void))
       break;
     default:
       if(c != 0 && input.e-input.r < INPUT_BUF){
+        c = (c == '\r') ? '\n' : c;
         input.buf[input.e++ % INPUT_BUF] = c;
         consputc(c);
         if(c == '\n' || c == C('D') || input.e == input.r+INPUT_BUF){

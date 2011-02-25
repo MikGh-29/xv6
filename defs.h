@@ -60,9 +60,9 @@ extern uchar    ioapicid;
 void            ioapicinit(void);
 
 // kalloc.c
-char*           kalloc(int);
-void            kfree(char*, int);
-void            kinit(void);
+char*           kalloc(void);
+void            kfree(char*);
+void            kinit();
 
 // kbd.c
 void            kbdintr(void);
@@ -100,8 +100,7 @@ int             kill(int);
 void            pinit(void);
 void            procdump(void);
 void            scheduler(void) __attribute__((noreturn));
-void            ksegment(void);
-void            usegment(void);
+void            sched(void);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(void);
@@ -142,7 +141,7 @@ void            timerinit(void);
 
 // trap.c
 void            idtinit(void);
-extern int      ticks;
+extern uint     ticks;
 void            tvinit(void);
 extern struct spinlock tickslock;
 
@@ -151,6 +150,20 @@ void            uartinit(void);
 void            uartintr(void);
 void            uartputc(int);
 
+// vm.c
+void            ksegment(void);
+void            kvmalloc(void);
+void            vmenable(void);
+pde_t*          setupkvm(void);
+char*           uva2ka(pde_t*, char*);
+int             allocuvm(pde_t*, uint, uint);
+int             deallocuvm(pde_t*, uint, uint);
+void            freevm(pde_t*);
+void            inituvm(pde_t*, char*, uint);
+int             loaduvm(pde_t*, char*, struct inode *, uint, uint);
+pde_t*          copyuvm(pde_t*,uint);
+void            switchuvm(struct proc*);
+void            switchkvm();
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
-

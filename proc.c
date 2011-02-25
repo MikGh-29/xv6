@@ -17,6 +17,8 @@ int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
 
+static void wakeup1(void *chan);
+
 void
 pinit(void)
 {
@@ -59,39 +61,6 @@ procdump(void)
   }
 }
 
-// Set up CPU's kernel segment descriptors.
-// Run once at boot time on each CPU.
-void
-ksegment(void)
-{
-  struct cpu *c;
-
-  c = &cpus[cpunum()];
-  c->gdt[SEG_KCODE] = SEG(STA_X|STA_R, 0, 0x100000 + 64*1024-1, 0);
-  c->gdt[SEG_KDATA] = SEG(STA_W, 0, 0xffffffff, 0);
-  c->gdt[SEG_KCPU] = SEG(STA_W, &c->cpu, 8, 0);
-  lgdt(c->gdt, sizeof(c->gdt));
-  loadgs(SEG_KCPU << 3);
-  
-  // Initialize cpu-local storage.
-  cpu = c;
-  proc = 0;
-}
-
-// Set up CPU's segment descriptors and current process task state.
-void
-usegment(void)
-{
-  pushcli();
-  cpu->gdt[SEG_UCODE] = SEG(STA_X|STA_R, proc->mem, proc->sz-1, DPL_USER);
-  cpu->gdt[SEG_UDATA] = SEG(STA_W, proc->mem, proc->sz-1, DPL_USER);
-  cpu->gdt[SEG_TSS] = SEG16(STS_T32A, &cpu->ts, sizeof(cpu->ts)-1, 0);
-  cpu->gdt[SEG_TSS].s = 0;
-  cpu->ts.ss0 = SEG_KDATA << 3;
-  cpu->ts.esp0 = (uint)proc->kstack + KSTACKSIZE;
-  ltr(SEG_TSS << 3);
-  popcli();
-}
 
 // Look in the process table for an UNUSED proc.
 // If found, change state to EMBRYO and return it.
@@ -114,8 +83,8 @@ found:
   p->pid = nextpid++;
   release(&ptable.lock);
 
-  // Allocate kernel stack if necessary.
-  if((p->kstack = kalloc(KSTACKSIZE)) == 0){
+  // Allocate kernel stack if possible.
+  if((p->kstack = kalloc()) == 0){
     p->state = UNUSED;
     return 0;
   }
@@ -146,20 +115,17 @@ userinit(void)
   
   p = allocproc();
   initproc = p;
-
-  // Initialize memory from initcode.S
-  p->sz = PAGE;
-  p->mem = kalloc(p->sz);
-  memset(p->mem, 0, p->sz);
-  memmove(p->mem, _binary_initcode_start, (int)_binary_initcode_size);
-
+  if(!(p->pgdir = setupkvm()))
+    panic("userinit: out of memory?");
+  inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
+  p->sz = PGSIZE;
   memset(p->tf, 0, sizeof(*p->tf));
   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
   p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
   p->tf->es = p->tf->ds;
   p->tf->ss = p->tf->ds;
   p->tf->eflags = FL_IF;
-  p->tf->esp = p->sz;
+  p->tf->esp = PGSIZE;
   p->tf->eip = 0;  // beginning of initcode.S
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
@@ -173,17 +139,16 @@ userinit(void)
 int
 growproc(int n)
 {
-  char *newmem;
-
-  newmem = kalloc(proc->sz + n);
-  if(newmem == 0)
-    return -1;
-  memmove(newmem, proc->mem, proc->sz);
-  memset(newmem + proc->sz, 0, n);
-  kfree(proc->mem, proc->sz);
-  proc->mem = newmem;
-  proc->sz += n;
-  usegment();
+  uint sz = proc->sz;
+  if(n > 0){
+    if(!(sz = allocuvm(proc->pgdir, sz, sz + n)))
+      return -1;
+  } else if(n < 0){
+    if(!(sz = deallocuvm(proc->pgdir, sz, sz + n)))
+      return -1;
+  }
+  proc->sz = sz;
+  switchuvm(proc);
   return 0;
 }
 
@@ -201,14 +166,13 @@ fork(void)
     return -1;
 
   // Copy process state from p.
-  np->sz = proc->sz;
-  if((np->mem = kalloc(np->sz)) == 0){
-    kfree(np->kstack, KSTACKSIZE);
+  if(!(np->pgdir = copyuvm(proc->pgdir, proc->sz))){
+    kfree(np->kstack);
     np->kstack = 0;
     np->state = UNUSED;
     return -1;
   }
-  memmove(np->mem, proc->mem, np->sz);
+  np->sz = proc->sz;
   np->parent = proc;
   *np->tf = *proc->tf;
 
@@ -222,8 +186,94 @@ fork(void)
  
   pid = np->pid;
   np->state = RUNNABLE;
-
+  safestrcpy(np->name, proc->name, sizeof(proc->name));
   return pid;
+}
+
+// Exit the current process.  Does not return.
+// An exited process remains in the zombie state
+// until its parent calls wait() to find out it exited.
+void
+exit(void)
+{
+  struct proc *p;
+  int fd;
+
+  if(proc == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(fd = 0; fd < NOFILE; fd++){
+    if(proc->ofile[fd]){
+      fileclose(proc->ofile[fd]);
+      proc->ofile[fd] = 0;
+    }
+  }
+
+  iput(proc->cwd);
+  proc->cwd = 0;
+
+  acquire(&ptable.lock);
+
+  // Parent might be sleeping in wait().
+  wakeup1(proc->parent);
+
+  // Pass abandoned children to init.
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->parent == proc){
+      p->parent = initproc;
+      if(p->state == ZOMBIE)
+        wakeup1(initproc);
+    }
+  }
+
+  // Jump into the scheduler, never to return.
+  proc->state = ZOMBIE;
+  sched();
+  panic("zombie exit");
+}
+
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+int
+wait(void)
+{
+  struct proc *p;
+  int havekids, pid;
+
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for zombie children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != proc)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one.
+        pid = p->pid;
+        kfree(p->kstack);
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->state = UNUSED;
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || proc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+    sleep(proc, &ptable.lock);  //DOC: wait-sleep
+  }
 }
 
 // Per-CPU process scheduler.
@@ -252,9 +302,10 @@ scheduler(void)
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       proc = p;
-      usegment();
+      switchuvm(p);
       p->state = RUNNING;
       swtch(&cpu->scheduler, proc->context);
+      switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
@@ -280,7 +331,6 @@ sched(void)
     panic("sched running");
   if(readeflags()&FL_IF)
     panic("sched interruptible");
-
   intena = cpu->intena;
   swtch(&proc->context, cpu->scheduler);
   cpu->intena = intena;
@@ -386,90 +436,5 @@ kill(int pid)
   }
   release(&ptable.lock);
   return -1;
-}
-
-// Exit the current process.  Does not return.
-// An exited process remains in the zombie state
-// until its parent calls wait() to find out it exited.
-void
-exit(void)
-{
-  struct proc *p;
-  int fd;
-
-  if(proc == initproc)
-    panic("init exiting");
-
-  // Close all open files.
-  for(fd = 0; fd < NOFILE; fd++){
-    if(proc->ofile[fd]){
-      fileclose(proc->ofile[fd]);
-      proc->ofile[fd] = 0;
-    }
-  }
-
-  iput(proc->cwd);
-  proc->cwd = 0;
-
-  acquire(&ptable.lock);
-
-  // Parent might be sleeping in wait().
-  wakeup1(proc->parent);
-
-  // Pass abandoned children to init.
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->parent == proc){
-      p->parent = initproc;
-      if(p->state == ZOMBIE)
-        wakeup1(initproc);
-    }
-  }
-
-  // Jump into the scheduler, never to return.
-  proc->state = ZOMBIE;
-  sched();
-  panic("zombie exit");
-}
-
-// Wait for a child process to exit and return its pid.
-// Return -1 if this process has no children.
-int
-wait(void)
-{
-  struct proc *p;
-  int havekids, pid;
-
-  acquire(&ptable.lock);
-  for(;;){
-    // Scan through table looking for zombie children.
-    havekids = 0;
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != proc)
-        continue;
-      havekids = 1;
-      if(p->state == ZOMBIE){
-        // Found one.
-        pid = p->pid;
-        kfree(p->mem, p->sz);
-        kfree(p->kstack, KSTACKSIZE);
-        p->state = UNUSED;
-        p->pid = 0;
-        p->parent = 0;
-        p->name[0] = 0;
-        p->killed = 0;
-        release(&ptable.lock);
-        return pid;
-      }
-    }
-
-    // No point waiting if we don't have any children.
-    if(!havekids || proc->killed){
-      release(&ptable.lock);
-      return -1;
-    }
-
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(proc, &ptable.lock);  //DOC: wait-sleep
-  }
 }
 

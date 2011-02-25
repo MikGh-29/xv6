@@ -11,7 +11,7 @@
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
-int ticks;
+uint ticks;
 
 void
 tvinit(void)
@@ -76,13 +76,15 @@ trap(struct trapframe *tf)
   default:
     if(proc == 0 || (tf->cs&3) == 0){
       // In kernel, it must be our mistake.
-      cprintf("unexpected trap %d from cpu %d eip %x\n",
-              tf->trapno, cpu->id, tf->eip);
+      cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
+              tf->trapno, cpu->id, tf->eip, rcr2());
       panic("trap");
     }
     // In user space, assume process misbehaved.
-    cprintf("pid %d %s: trap %d err %d on cpu %d eip %x -- kill proc\n",
-            proc->pid, proc->name, tf->trapno, tf->err, cpu->id, tf->eip);
+    cprintf("pid %d %s: trap %d err %d on cpu %d "
+            "eip 0x%x addr 0x%x--kill proc\n",
+            proc->pid, proc->name, tf->trapno, tf->err, cpu->id, tf->eip, 
+            rcr2());
     proc->killed = 1;
   }
 

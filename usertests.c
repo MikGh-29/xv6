@@ -3,6 +3,8 @@
 #include "user.h"
 #include "fs.h"
 #include "fcntl.h"
+#include "syscall.h"
+#include "traps.h"
 
 char buf[2048];
 char name[3];
@@ -322,8 +324,10 @@ void
 mem(void)
 {
   void *m1, *m2;
-  int pid;
+  int pid, ppid;
 
+  printf(1, "mem test\n");
+  ppid = getpid();
   if((pid = fork()) == 0){
     m1 = 0;
     while((m2 = malloc(10001)) != 0) {
@@ -338,6 +342,7 @@ mem(void)
     m1 = malloc(1024*20);
     if(m1 == 0) {
       printf(1, "couldn't allocate mem?!!\n");
+      kill(ppid);
       exit();
     }
     free(m1);
@@ -1229,6 +1234,191 @@ forktest(void)
   printf(1, "fork test OK\n");
 }
 
+void
+sbrktest(void)
+{
+  int pid;
+  char *oldbrk = sbrk(0);
+
+  printf(stdout, "sbrk test\n");
+
+  // can one sbrk() less than a page?
+  char *a = sbrk(0);
+  int i;
+  for(i = 0; i < 5000; i++){
+    char *b = sbrk(1);
+    if(b != a){
+      printf(stdout, "sbrk test failed %d %x %x\n", i, a, b);
+      exit();
+    }
+    *b = 1;
+    a = b + 1;
+  }
+  pid = fork();
+  if(pid < 0){
+    printf(stdout, "sbrk test fork failed\n");
+    exit();
+  }
+  char *c = sbrk(1);
+  c = sbrk(1);
+  if(c != a + 1){
+    printf(stdout, "sbrk test failed post-fork\n");
+    exit();
+  }
+  if(pid == 0)
+    exit();
+  wait();
+
+  // can one allocate the full 640K?
+  a = sbrk(0);
+  uint amt = (640 * 1024) - (uint) a;
+  char *p = sbrk(amt);
+  if(p != a){
+    printf(stdout, "sbrk test failed 640K test, p %x a %x\n", p, a);
+    exit();
+  }
+  char *lastaddr = (char *)(640 * 1024 - 1);
+  *lastaddr = 99;
+
+  // is one forbidden from allocating more than 640K?
+  c = sbrk(4096);
+  if(c != (char *) 0xffffffff){
+    printf(stdout, "sbrk allocated more than 640K, c %x\n", c);
+    exit();
+  }
+
+  // can one de-allocate?
+  a = sbrk(0);
+  c = sbrk(-4096);
+  if(c == (char *) 0xffffffff){
+    printf(stdout, "sbrk could not deallocate\n");
+    exit();
+  }
+  c = sbrk(0);
+  if(c != a - 4096){
+    printf(stdout, "sbrk deallocation produced wrong address, a %x c %x\n", a, c);
+    exit();
+  }
+
+  // can one re-allocate that page?
+  a = sbrk(0);
+  c = sbrk(4096);
+  if(c != a || sbrk(0) != a + 4096){
+    printf(stdout, "sbrk re-allocation failed, a %x c %x\n", a, c);
+    exit();
+  }
+  if(*lastaddr == 99){
+    // should be zero
+    printf(stdout, "sbrk de-allocation didn't really deallocate\n");
+    exit();
+  }
+
+  c = sbrk(4096);
+  if(c != (char *) 0xffffffff){
+    printf(stdout, "sbrk was able to re-allocate beyond 640K, c %x\n", c);
+    exit();
+  }
+
+  // can we read the kernel's memory?
+  for(a = (char*)(640*1024); a < (char *)2000000; a += 50000){
+    int ppid = getpid();
+    int pid = fork();
+    if(pid < 0){
+      printf(stdout, "fork failed\n");
+      exit();
+    }
+    if(pid == 0){
+      printf(stdout, "oops could read %x = %x\n", a, *a);
+      kill(ppid);
+      exit();
+    }
+    wait();
+  }
+
+  // if we run the system out of memory, does it clean up the last
+  // failed allocation?
+  sbrk(-(sbrk(0) - oldbrk));
+  int pids[32];
+  int fds[2];
+  if(pipe(fds) != 0){
+    printf(1, "pipe() failed\n");
+    exit();
+  }
+  for(i = 0; i < sizeof(pids)/sizeof(pids[0]); i++){
+    if((pids[i] = fork()) == 0) {
+      // allocate the full 640K
+      sbrk((640 * 1024) - (uint)sbrk(0));
+      write(fds[1], "x", 1);
+      // sit around until killed
+      for(;;) sleep(1000);
+    }
+    char scratch;
+    if(pids[i] != -1)
+      read(fds[0], &scratch, 1);
+  }
+  // if those failed allocations freed up the pages they did allocate,
+  // we'll be able to allocate here
+  c = sbrk(4096);
+  for(i = 0; i < sizeof(pids)/sizeof(pids[0]); i++){
+    if(pids[i] == -1)
+      continue;
+    kill(pids[i]);
+    wait();
+  }
+  if(c == (char*)0xffffffff) {
+    printf(stdout, "failed sbrk leaked memory\n");
+    exit();
+  }
+
+  if(sbrk(0) > oldbrk)
+    sbrk(-(sbrk(0) - oldbrk));
+
+  printf(stdout, "sbrk test OK\n");
+}
+
+void
+validateint(int *p)
+{
+  int res;
+  asm("mov %%esp, %%ebx\n\t"
+      "mov %3, %%esp\n\t"
+      "int %2\n\t"
+      "mov %%ebx, %%esp" :
+      "=a" (res) :
+      "a" (SYS_sleep), "n" (T_SYSCALL), "c" (p) :
+      "ebx");
+}
+
+void
+validatetest(void)
+{
+  int hi = 1100*1024;
+
+  printf(stdout, "validate test\n");
+
+  uint p;
+  for (p = 0; p <= (uint)hi; p += 4096) {
+    int pid;
+    if ((pid = fork()) == 0) {
+      // try to crash the kernel by passing in a badly placed integer
+      validateint((int*)p);
+      exit();
+    }
+    sleep(0);
+    sleep(0);
+    kill(pid);
+    wait();
+
+    // try to crash the kernel by passing in a bad string pointer
+    if (link("nosuchfile", (char*)p) != -1) {
+      printf(stdout, "link should not succeed\n");
+      exit();
+    }
+  }
+
+  printf(stdout, "validate ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1239,6 +1429,9 @@ main(int argc, char *argv[])
     exit();
   }
   close(open("usertests.ran", O_CREATE));
+
+  sbrktest();
+  validatetest();
 
   opentest();
   writetest();
