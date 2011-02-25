@@ -169,9 +169,11 @@ fs.img: mkfs README $(UPROGS)
 -include *.d
 
 clean: 
-	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
+	rm -rf *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*.o *.d *.asm *.sym vectors.S parport.out \
 	bootblock kernel xv6.img fs.img mkfs \
+	bootother bootother.out initcode initcode.out \
+	xv6.pdf xv6.ps fmt \
 	$(UPROGS)
 
 # make a printout
