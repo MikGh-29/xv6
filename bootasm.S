@@ -13,7 +13,7 @@
 .code16                       # Assemble for 16-bit mode
 .globl start
 start:
-  cli                         # BIOS enabled interrupts ; disable
+  cli                         # BIOS enabled interrupts; disable
 
   # Set up the important data segment registers (DS, ES, SS).
   xorw    %ax,%ax             # Segment number zero
