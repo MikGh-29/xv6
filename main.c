@@ -103,7 +103,7 @@ bootothers(void)
     // its first instruction.
     stack = kalloc();
     *(void**)(code-4) = stack + KSTACKSIZE;
-    *(void**)(code-8) = mpmain;
+    *(void**)(code-8) = (void*)(uint)mpmain; // ISO C makes us cast to uint then void* :-/
 
     lapicstartap(c->id, (uint)code);
 

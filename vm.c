@@ -81,7 +81,7 @@ mappages(pde_t *pgdir, void *la, uint size, uint pa, int perm)
   pte_t *pte;
   
   a = PGROUNDDOWN(la);
-  last = PGROUNDDOWN(la + size - 1);
+  last = PGROUNDDOWN((uint)la + size - 1);
   for(;;){
     pte = walkpgdir(pgdir, a, 1);
     if(pte == 0)
@@ -142,7 +142,7 @@ setupkvm(void)
   memset(pgdir, 0, PGSIZE);
   k = kmap;
   for(k = kmap; k < &kmap[NELEM(kmap)]; k++)
-    if(mappages(pgdir, k->p, k->e - k->p, (uint)k->p, k->perm) < 0)
+    if(mappages(pgdir, k->p, (uint)k->e - (uint)k->p, (uint)k->p, k->perm) < 0)
       return 0;
 
   return pgdir;
