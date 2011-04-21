@@ -101,7 +101,7 @@ mpinit(void)
   struct mp *mp;
   struct mpconf *conf;
   struct mpproc *proc;
-  struct mpioapic *ioapic;
+  struct mpioapic *mpioapic;
 
   bcpu = &cpus[0];
   if((conf = mpconfig(&mp)) == 0)
@@ -111,6 +111,11 @@ mpinit(void)
   for(p=(uchar*)(conf+1), e=(uchar*)conf+conf->length; p<e; ){
     switch(*p){
     case MPPROC:
+      if (ncpu >= NCPU) {
+        cprintf("mpinit: more than %d cpus!\n", NCPU);
+        p += sizeof(struct mpproc);
+        continue;
+      }
       proc = (struct mpproc*)p;
       if(ncpu != proc->apicid){
         cprintf("mpinit: ncpu=%d apicid=%d\n", ncpu, proc->apicid);
@@ -123,13 +128,20 @@ mpinit(void)
       p += sizeof(struct mpproc);
       continue;
     case MPIOAPIC:
-      ioapic = (struct mpioapic*)p;
-      ioapicid = ioapic->apicno;
+      if (ioapic != 0) {
+        cprintf("mpinit: more than 1 ioapic!\n");
+        p += sizeof(struct mpioapic);
+        continue;
+      }
+      mpioapic = (struct mpioapic*)p;
+      ioapic = (struct ioapic*)mpioapic->addr;
+      ioapicid = mpioapic->apicno;
       p += sizeof(struct mpioapic);
       continue;
     case MPBUS:
     case MPIOINTR:
     case MPLINTR:
+//      cprintf("mpinit: ignored config entry %x\n", *p);
       p += 8;
       continue;
     default:
@@ -141,6 +153,7 @@ mpinit(void)
     // Didn't like what we found; fall back to no MP.
     ncpu = 1;
     lapic = 0;
+    ioapic = 0;
     ioapicid = 0;
     return;
   }

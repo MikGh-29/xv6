@@ -6,6 +6,7 @@ struct pipe;
 struct proc;
 struct spinlock;
 struct stat;
+struct ioapic;
 
 // bio.c
 void            binit(void);
@@ -55,6 +56,7 @@ void            ideintr(void);
 void            iderw(struct buf*);
 
 // ioapic.c
+extern volatile struct ioapic *ioapic;
 void            ioapicenable(int irq, int cpu);
 extern uchar    ioapicid;
 void            ioapicinit(void);
